@@ -3,8 +3,16 @@ import requests
 import re
 import base64
 from urllib.parse import urlparse, unquote
+import os
 
 app = Flask(__name__)
+
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 class URLBypasser:
     def __init__(self):
@@ -15,7 +23,8 @@ class URLBypasser:
     
     def bypass_url(self, url):
         try:
-            print(f"Bypassing: {url}")
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
             
             response = self.session.get(url, allow_redirects=False, timeout=10)
             
@@ -24,73 +33,38 @@ class URLBypasser:
                 if redirect_url and self.is_valid_url(redirect_url):
                     return redirect_url
             
-            final_url = self.extract_from_html(url, response.text)
-            if final_url != url:
+            final_url = self.extract_from_html(response.text)
+            if final_url and final_url != url:
                 return final_url
-                
-            param_url = self.extract_from_params(url)
-            if param_url != url:
-                return param_url
                 
             return url
             
         except Exception as e:
             return f"Error: {str(e)}"
     
-    def extract_from_html(self, url, html):
+    def extract_from_html(self, html):
         patterns = [
-            (r'window\.location\s*=\s*["\']([^"\']+)["\']', None),
-            (r'window\.location\.href\s*=\s*["\']([^"\']+)["\']', None),
-            (r'window\.open\s*\(\s*["\']([^"\']+)["\']', None),
-            (r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*url=([^"\']+)', None),
-            (r'atob\s*\(\s*["\']([^"\']+)["\']', self.decode_base64_url),
-            (r'[\?&](?:url|u|link|target|redirect)=([^&"\']+)', None),
+            r'window\.location\s*=\s*["\']([^"\']+)["\']',
+            r'window\.location\.href\s*=\s*["\']([^"\']+)["\']',
+            r'window\.open\s*\(\s*["\']([^"\']+)["\']',
+            r'<meta[^>]*http-equiv=["\']refresh["\'][^>]*url=([^"\']+)',
+            r'atob\s*\(\s*["\']([^"\']+)["\']',
+            r'[\?&](?:url|u|link|target|redirect)=([^&"\']+)',
         ]
         
-        for pattern, processor in patterns:
+        for pattern in patterns:
             matches = re.findall(pattern, html, re.IGNORECASE)
             for match in matches:
-                if processor:
-                    result = processor(match)
-                else:
-                    result = match
+                url = match
+                if 'atob' in pattern:
+                    try:
+                        url = base64.b64decode(match).decode('utf-8')
+                    except:
+                        pass
                 
-                if self.is_valid_url(result):
-                    return result
-                   
-        return url
-    
-    def extract_from_params(self, url):
-        try:
-            parsed = urlparse(url)
-            params = parse_qs(parsed.query)
-            
-            for key in ['url', 'u', 'link', 'target', 'redirect']:
-                if key in params:
-                    value = params[key][0]
-                    decoded = unquote(value)
-                    if self.is_valid_url(decoded):
-                        return decoded
-            
-            if 'r' in params:
-                try:
-                    decoded = base64.b64decode(params['r'][0]).decode('utf-8')
-                    if self.is_valid_url(decoded):
-                        return decoded
-                except:
-                    pass
-                    
-        except Exception:
-            pass
-            
-        return url
-    
-    def decode_base64_url(self, encoded_str):
-        try:
-            decoded = base64.b64decode(encoded_str).decode('utf-8')
-            return decoded
-        except:
-            return encoded_str
+                if self.is_valid_url(url):
+                    return url
+        return None
     
     def is_valid_url(self, url):
         try:
@@ -115,13 +89,7 @@ def api_bypass():
             url = request.args.get('url', '').strip()
         
         if not url:
-            return jsonify({
-                "success": False, 
-                "message": "URL parameter is required"
-            })
-        
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
+            return jsonify({"success": False, "message": "URL is required"})
         
         result = bypasser.bypass_url(url)
         
@@ -133,10 +101,7 @@ def api_bypass():
         })
         
     except Exception as e:
-        return jsonify({
-            "success": False, 
-            "message": f"Server error: {str(e)}"
-        })
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"})
 
 if __name__ == '__main__':
     app.run(debug=True)
